@@ -1,6 +1,6 @@
 # CTDoseExtractor
 
-Um extrator robusto de informações de relatórios de dose de radiação de tomografia computadorizada (CT) em formato PDF.
+Um extrator robusto de informações de relatórios de dose de radiação de tomografia computadorizada (CT) em formato PDF, com exportação para Excel.
 
 ## 📋 Visão Geral
 
@@ -12,6 +12,8 @@ Esta ferramenta usa uma abordagem **agnóstica** que foca nos dados mais importa
 
 ### ✅ Dados Prioritários (Alta Confiabilidade)
 - **Patient ID** - Identificação única do paciente
+- **Birth Date** - Data de nascimento
+- **Sex** - Sexo do paciente
 - **Study ID** - Identificação do estudo
 - **Accession Number** - Número de acesso único
 - **Study Date** - Data do exame
@@ -24,19 +26,23 @@ Os PDFs de relatórios CT frequentemente apresentam formatação em múltiplas c
 
 ### Pré-requisitos
 ```bash
-pip install pdfplumber
+pip install pdfplumber openpyxl
 ```
 
 ### Uso Básico (Linha de Comando)
 
 1. Coloque seus PDFs na pasta `ct_reports` no mesmo diretório do script
-2. Execute o script:
+2. Execute os scripts:
 
 ```bash
+# Extrair dados dos PDFs para JSON
 python CTDoseExtractor.py
+
+# Converter JSONs para Excel
+python CTDoseExcel.py
 ```
 
-### Opções da Linha de Comando
+### Opções do CTDoseExtractor
 
 ```bash
 # Usar pasta diferente para PDFs
@@ -53,6 +59,19 @@ python CTDoseExtractor.py --output relatorios_completos.json
 
 # Todas as opções juntas
 python CTDoseExtractor.py --folder pdfs --output-folder jsons --output todos.json --debug
+```
+
+### Opções do CTDoseExcel
+
+```bash
+# Especificar pasta com JSONs
+python CTDoseExcel.py --input-folder minha_pasta_json
+
+# Especificar nome do arquivo Excel de saída
+python CTDoseExcel.py --output relatorio_dose_ct.xlsx
+
+# Ambas as opções
+python CTDoseExcel.py --input-folder dados_json --output relatorio.xlsx
 ```
 
 ### Uso como Biblioteca Python
@@ -74,6 +93,8 @@ study_id = report.essential.study_id
 
 ## 📊 Estrutura dos Dados Extraídos
 
+### JSON
+
 ```json
 {
   "hospital": "Hospital Universitario ...",
@@ -82,7 +103,9 @@ study_id = report.essential.study_id
     "patient_id": "05074687",
     "study_id": "009211", 
     "accession_number": "342865",
-    "study_date": "May 5, 2025, 1:20:41 PM"
+    "study_date": "May 5, 2025, 1:20:41 PM",
+    "birth_date": "Jul 1, 1997",
+    "sex": "Female"
   },
   "device": {
     "observer_name": "CT",
@@ -128,6 +151,26 @@ study_id = report.essential.study_id
 }
 ```
 
+### Excel
+
+O arquivo Excel gerado pelo `CTDoseExcel.py` inclui as seguintes colunas:
+- ID do paciente
+- Sexo
+- Data de nascimento
+- Idade (calculada automaticamente)
+- Pesquisa de interesse (protocolo de aquisição)
+- Data do exame
+- Descrição da série (comentário da aquisição)
+- Scan mode
+- mAs
+- kV
+- CTDIvol
+- DLP
+- DLP total
+- Phantom type
+- SSDE
+- Avg scan size
+
 ## 🔧 Características Técnicas
 
 ### Robustez na Extração
@@ -141,48 +184,39 @@ study_id = report.essential.study_id
 - Espaçamentos inconsistentes  
 - Quebras de linha inesperadas
 - Formatações variadas de campos
+- Valores nulos (substituídos por "-" na exportação Excel)
 
-## 📈 Exemplo de Análise
+## 📊 Exportação para Excel
 
-Com os dados extraídos, você pode facilmente:
+O script `CTDoseExcel.py` permite:
 
-```python
-# Acessar identificadores únicos
-patient_id = report['essential']['patient_id']
-study_id = report['essential']['study_id']
-
-# Analisar dados de dose
-total_dlp = report['irradiation']['total_dlp']
-acquisitions_count = len(report['acquisitions'])
-
-# Verificar cada aquisição
-for acq in report['acquisitions']:
-    protocol = acq['protocol']
-    dlp = acq['ct_dose']['dlp']  
-    ctdivol = acq['ct_dose']['mean_ctdivol']
-```
-
-## 🎓 Contexto Acadêmico
-
-Este projeto foi desenvolvido como ferramenta de apoio para pesquisa universitária em **análise de doses de radiação** em exames de tomografia computadorizada. O foco em identificadores únicos permite integração eficiente com sistemas de informação hospitalares existentes.
+- Gerar uma planilha formatada com todos os dados importantes
+- Calcular a idade automaticamente a partir da data de nascimento
+- Tratar valores nulos adequadamente (substituindo por "-")
+- Manter todas as unidades originais
 
 ## 📂 Estrutura de Arquivos
 
 ```
 CTDoseExtractor/
-├── CTDoseExtractor.py       # Script principal
+├── CTDoseExtractor.py       # Script de extração PDF → JSON
+├── CTDoseExcel.py           # Script de conversão JSON → Excel
 ├── README.md                # Este arquivo
-├── requirements.txt         # Dependências (pdfplumber)
+├── requirements.txt         # Dependências (pdfplumber, openpyxl)
 ├── ct_reports/              # Pasta para PDFs (criada automaticamente)
 │   ├── relatorio1.pdf       # Seus arquivos PDF...
 │   ├── relatorio2.pdf
 │   └── ...
-└── ct_reports_json/         # Pasta para JSONs gerados (criada automaticamente)
-    ├── ct_reports_all.json  # JSON com TODOS os relatórios
-    ├── ct_report_05074687.json  # JSON individual (Patient ID 05074687)
-    ├── ct_report_12345678.json  # JSON individual (Patient ID 12345678)
-    └── ...
+├── ct_reports_json/         # Pasta para JSONs gerados (criada automaticamente)
+│   ├── ct_reports_all.json  # JSON com TODOS os relatórios
+│   ├── ct_report_05074687.json  # JSON individual (Patient ID 05074687)
+│   └── ct_report_12345678.json  # JSON individual (Patient ID 12345678)
+└── ct_dose_report.xlsx      # Planilha Excel com todos os dados (gerada pelo CTDoseExcel.py)
 ```
+
+## 🎓 Contexto Acadêmico
+
+Este projeto foi desenvolvido como ferramenta de apoio para pesquisa universitária em **análise de doses de radiação** em exames de tomografia computadorizada. O foco em identificadores únicos permite integração eficiente com sistemas de informação hospitalares existentes.
 
 ---
 
