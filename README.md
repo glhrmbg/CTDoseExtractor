@@ -12,6 +12,7 @@ Esta ferramenta usa uma abordagem **agnóstica** que foca nos dados mais importa
 
 ### ✅ Dados Prioritários (Alta Confiabilidade)
 - **Patient ID** - Identificação única do paciente
+- **Patient Name** - Nome Completo do paciente
 - **Birth Date** - Data de nascimento
 - **Sex** - Sexo do paciente
 - **Study ID** - Identificação do estudo
@@ -26,7 +27,7 @@ Os PDFs de relatórios CT frequentemente apresentam formatação em múltiplas c
 
 ### Pré-requisitos
 ```bash
-pip install pdfplumber openpyxl
+pip install pymupdf openpyxl
 ```
 
 ### Uso Básico (Linha de Comando)
@@ -101,6 +102,7 @@ study_id = report.essential.study_id
   "report_date": "May 5, 2025, 1:21:31 PM",
   "essential": {
     "patient_id": "05074687",
+    "patient_name": "....",
     "study_id": "009211", 
     "accession_number": "342865",
     "study_date": "May 5, 2025, 1:20:41 PM",
@@ -155,6 +157,7 @@ study_id = report.essential.study_id
 
 O arquivo Excel gerado pelo `CTDoseExcel.py` inclui as seguintes colunas:
 - ID do paciente
+- Nome do paciente
 - Sexo
 - Data de nascimento
 - Idade (calculada automaticamente)
@@ -202,7 +205,7 @@ CTDoseExtractor/
 ├── CTDoseExtractor.py       # Script de extração PDF → JSON
 ├── CTDoseExcel.py           # Script de conversão JSON → Excel
 ├── README.md                # Este arquivo
-├── requirements.txt         # Dependências (pdfplumber, openpyxl)
+├── requirements.txt         # Dependências (pymupdf, openpyxl)
 ├── ct_reports/              # Pasta para PDFs (criada automaticamente)
 │   ├── relatorio1.pdf       # Seus arquivos PDF...
 │   ├── relatorio2.pdf

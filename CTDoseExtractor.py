@@ -1,4 +1,4 @@
-import pdfplumber
+import pymupdf
 import re
 import os
 import glob
@@ -11,11 +11,12 @@ import json
 class EssentialInfo:
     """Informações essenciais para identificação do exame"""
     patient_id: str = ""
+    patient_name: str = ""
     study_id: str = ""
     accession_number: str = ""
     study_date: str = ""
-    birth_date: str = ""  # Data de nascimento do paciente
-    sex: str = ""  # Sexo do paciente
+    birth_date: str = ""
+    sex: str = ""
 
 
 @dataclass
@@ -82,10 +83,10 @@ class CTScanReportMinimal:
     hospital: str = ""
     report_date: str = ""
 
-    # APENAS os dados essenciais para identificação
+    # Dados essenciais para identificação
     essential: EssentialInfo = None
 
-    # Dados técnicos (estes funcionam bem)
+    # Dados técnicos
     device: DeviceInfo = None
     irradiation: IrradiationInfo = None
     acquisitions: List[CTAcquisition] = None
@@ -110,7 +111,6 @@ class CTReportExtractorMinimal:
                 r'Patient\s*ID:\s*(\d+)',
                 r'PatientID:\s*(\d+)',
                 r'Patient\s*ID\s*:\s*(\d+)',
-                r'ID:\s*(\d+)'  # Mais geral, só usar se outros falharem
             ],
             'study_id': [
                 r'Study\s*ID:\s*(\d+)',
@@ -123,15 +123,15 @@ class CTReportExtractorMinimal:
                 r'Accession\s*Number\s*:\s*(\d+)'
             ],
             'study_date': [
-                r'Study\s*Date:\s*([^\\n]+?)(?=\s+[A-Z]|\s*$)',
-                r'StudyDate:\s*([^\\n]+?)(?=\s+[A-Z]|\s*$)',
-                r'Study\s*Date\s*:\s*([^\\n]+?)(?=\s+[A-Z]|\s*$)'
+                r'Study\s*Date:\s*([^\\n]+?)(?=\n|$)',
+                r'StudyDate:\s*([^\\n]+?)(?=\n|$)',
+                r'Study\s*Date\s*:\s*([^\\n]+?)(?=\n|$)'
             ],
             'birth_date': [
-                r"Patient's\s*Birth\s*Date:\s*([^\\n]+?)(?=\s+[A-Z]|\s*$)",
-                r"Patient's\s*Birth\s*Date\s*:\s*([^\\n]+?)(?=\s+[A-Z]|\s*$)",
-                r"Birth\s*Date:\s*([^\\n]+?)(?=\s+[A-Z]|\s*$)",
-                r"BirthDate:\s*([^\\n]+?)(?=\s+[A-Z]|\s*$)"
+                r"Patient's\s*Birth\s*Date:\s*([^\\n]+?)(?=\n|$)",
+                r"Patient's\s*Birth\s*Date\s*:\s*([^\\n]+?)(?=\n|$)",
+                r"Birth\s*Date:\s*([^\\n]+?)(?=\n|$)",
+                r"BirthDate:\s*([^\\n]+?)(?=\n|$)"
             ],
             'sex': [
                 r"Patient's\s*Sex:\s*(\w+)",
@@ -141,7 +141,7 @@ class CTReportExtractorMinimal:
             ]
         }
 
-        # Padrões para dados técnicos (mantidos da versão anterior)
+        # Padrões para dados técnicos (mantidos)
         self.technical_patterns = {
             # Dispositivo
             'device_name': r"Device Observer Name:\s*(.+)",
@@ -187,6 +187,52 @@ class CTReportExtractorMinimal:
             'alert_value': r"CTDIvol Alert Value\s*=\s*([\d.]+\s*mGy)"
         }
 
+    def clean_extracted_text(self, text: str) -> str:
+        """
+        ✨ FUNÇÃO DE LIMPEZA: Remove apenas caracteres invisíveis problemáticos
+
+        Remove APENAS:
+        - NNBSP (Non-Breaking Space)
+        - Zero-width spaces
+        - Outros espaços Unicode invisíveis
+        - Espaços duplos/triplos
+        - Correção específica para horários (espaço após :)
+
+        NÃO mexe com pontuação normal de números/unidades!
+        """
+        if not text:
+            return ""
+
+        cleaned = text
+
+        # Remove APENAS NNBSP e caracteres invisíveis
+        cleaned = cleaned.replace('\u00A0', ' ')  # Non-Breaking Space
+        cleaned = cleaned.replace('NNBSP', ' ')  # NNBSP literal (caso apareça assim)
+
+        # Remove outros espaços Unicode INVISÍVEIS (apenas os problemáticos)
+        cleaned = cleaned.replace('\u2000', ' ')  # En Quad
+        cleaned = cleaned.replace('\u2001', ' ')  # Em Quad
+        cleaned = cleaned.replace('\u2002', ' ')  # En Space
+        cleaned = cleaned.replace('\u2003', ' ')  # Em Space
+        cleaned = cleaned.replace('\u2009', ' ')  # Thin Space
+        cleaned = cleaned.replace('\u200A', ' ')  # Hair Space
+        cleaned = cleaned.replace('\u202F', ' ')  # Narrow No-Break Space
+
+        # Remove zero-width characters (completamente invisíveis)
+        cleaned = cleaned.replace('\u200B', '')  # Zero Width Space
+        cleaned = cleaned.replace('\u200C', '')  # Zero Width Non-Joiner
+        cleaned = cleaned.replace('\u200D', '')  # Zero Width Joiner
+        cleaned = cleaned.replace('\uFEFF', '')  # Zero Width No-Break Space (BOM)
+
+        # ✨ CORREÇÃO ESPECÍFICA: Remove espaço extra após : em horários (ex: "2:40: 38" → "2:40:38")
+        # Mas APENAS em contexto de horário (números:números)
+        cleaned = re.sub(r'(\d+:\d+):\s+(\d+)', r'\1:\2', cleaned)
+
+        # APENAS normaliza espaços múltiplos (não mexe com pontuação!)
+        cleaned = re.sub(r'  +', ' ', cleaned)  # Substitui 2+ espaços por 1 espaço
+
+        return cleaned.strip()
+
     def extract_hospital_info(self, text: str) -> tuple:
         """Extrai informações do hospital e data do relatório"""
         lines = text.split('\n')
@@ -198,24 +244,141 @@ class CTReportExtractorMinimal:
                 parts = line.split("on CT,")
                 if len(parts) >= 2:
                     hospital = parts[0].replace("By ", "").strip()
-                    report_date = parts[1].strip()
+                    report_date = self.clean_extracted_text(parts[1].strip())
                 break
 
         return hospital, report_date
+
+    def extract_patient_name(self, text: str) -> str:
+        """Extrai o nome do paciente usando PyMuPDF + Limpeza"""
+
+        lines = text.split('\n')
+        patient_name_parts = []
+
+        for i, line in enumerate(lines):
+            # Procura pela linha que contém "Patient's Name:"
+            line_stripped = line.strip()
+            if re.search(r"Patient's\s*Name\s*:", line_stripped, re.IGNORECASE):
+                # Extrai o que vem depois de "Patient's Name:"
+                name_part = re.sub(r".*Patient's\s*Name\s*:\s*", "", line_stripped, flags=re.IGNORECASE).strip()
+                if name_part:
+                    # ✨ LIMPA caracteres problemáticos
+                    name_part = self.clean_extracted_text(name_part)
+                    patient_name_parts.append(name_part)
+
+                # Com PyMuPDF, verifica as próximas linhas para capturar continuação do nome
+                j = i + 1
+                while j < len(lines):
+                    next_line = lines[j].strip()
+
+                    # Para se encontrar uma linha vazia
+                    if not next_line:
+                        break
+
+                    # Para se encontrar outro campo (que contém ':')
+                    if ':' in next_line:
+                        break
+
+                    # Para se encontrar um campo conhecido do paciente
+                    known_fields = ['Patient ID', 'PatientID', 'Patient\'s Birth', 'Patient\'s Sex']
+                    if any(field in next_line for field in known_fields):
+                        break
+
+                    # Se chegou até aqui, provavelmente é continuação do nome
+                    # ✨ LIMPA caracteres problemáticos
+                    next_line_clean = self.clean_extracted_text(next_line)
+                    patient_name_parts.append(next_line_clean)
+                    j += 1
+
+                break
+
+        # Junta todas as partes do nome e limpa
+        if patient_name_parts:
+            full_name = ' '.join(patient_name_parts).strip()
+            # Remove espaços duplos (redundante, mas garantia extra)
+            full_name = re.sub(r'\s+', ' ', full_name)
+            return full_name
+
+        return ""
+
+    def extract_study_date_clean(self, text: str) -> str:
+        """
+        ✨ MÉTODO MELHORADO: Extrai Study Date e limpa caracteres problemáticos
+
+        Com PyMuPDF pode vir assim:
+        Study Date: May 13, 2025, 2:40:
+        38 PM
+
+        Ou com NNBSP: "May 13, 2025, 2:40:NNBSP38 PM"
+        """
+
+        lines = text.split('\n')
+
+        for i, line in enumerate(lines):
+            if re.search(r'Study\s*Date\s*:', line, re.IGNORECASE):
+                # Pega o que vem depois de "Study Date:"
+                date_part = re.sub(r'.*Study\s*Date\s*:\s*', '', line, flags=re.IGNORECASE).strip()
+
+                # Se a linha termina com ":" ou parece incompleta, pega a próxima linha também
+                if (date_part.endswith(':') or date_part.endswith(',')) and i + 1 < len(lines):
+                    next_line = lines[i + 1].strip()
+                    if next_line and not ':' in next_line:
+                        date_part = (date_part + ' ' + next_line).strip()
+
+                if date_part:
+                    # Limpa caracteres problemáticos
+                    date_part = self.clean_extracted_text(date_part)
+                    return date_part
+
+        # Fallback para os padrões originais
+        raw_date = self.extract_essential_value(text, self.essential_patterns['study_date'])
+        return self.clean_extracted_text(raw_date) if raw_date else ""
+
+    def extract_physical_location_multiline(self, text: str) -> str:
+        """Extrai physical location mesmo se quebrado em múltiplas linhas"""
+
+        lines = text.split('\n')
+
+        for i, line in enumerate(lines):
+            if re.search(r'Device Observer Physical Location during observation:', line, re.IGNORECASE):
+                # Pega o que vem depois do campo
+                location_part = re.sub(r'.*Device Observer Physical Location during observation:\s*', '', line,
+                                       flags=re.IGNORECASE).strip()
+
+                # Se parece truncado (termina abruptamente sem pontuação) e existe próxima linha
+                if location_part and i + 1 < len(lines):
+                    next_line = lines[i + 1].strip()
+
+                    # Se a próxima linha não é um campo numerado (1.10, 1.11, etc.)
+                    # e não contém ":", provavelmente é continuação
+                    if (next_line and
+                            not re.match(r'^\d+\.\d+', next_line) and  # Não começa com número.número
+                            ':' not in next_line and  # Não é outro campo
+                            len(next_line) < 50):  # Linha razoavelmente curta (continuação)
+
+                        location_part = (location_part + ' ' + next_line).strip()
+
+                if location_part:
+                    return self.clean_extracted_text(location_part)
+
+        # Fallback para o método original
+        return self.extract_technical_value(text, self.technical_patterns['location'])
 
     def extract_essential_value(self, text: str, pattern_list: List[str]) -> str:
         """Tenta extrair valor usando múltiplos padrões até encontrar um"""
         for pattern in pattern_list:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                return match.group(1).strip()
+                # ✨ LIMPA o resultado antes de retornar
+                return self.clean_extracted_text(match.group(1))
         return ""
 
     def extract_technical_value(self, text: str, pattern: str) -> str:
         """Extrai um valor técnico usando regex"""
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
-            return match.group(1).strip()
+            # ✨ LIMPA o resultado antes de retornar
+            return self.clean_extracted_text(match.group(1))
         return ""
 
     def extract_ct_acquisitions(self, text: str) -> List[CTAcquisition]:
@@ -281,30 +444,33 @@ class CTReportExtractorMinimal:
         report = CTScanReportMinimal()
         full_text = ""
 
-        with pdfplumber.open(pdf_path) as pdf:
-            for page in pdf.pages:
-                full_text += page.extract_text() + "\n"
+        doc = pymupdf.open(pdf_path)
+        for page in doc:
+            full_text += page.get_text() + "\n"
+        doc.close()
 
         if debug_mode:
             print(f"\n{'=' * 60}")
-            print("VERSÃO AGNÓSTICA - EXTRAINDO APENAS IDs ESSENCIAIS")
+            print("VERSÃO AGNÓSTICA - EXTRAINDO APENAS INFORMAÇÕES ESSENCIAIS")
             print(f"{'=' * 60}")
 
         # Extrai informações do hospital
         report.hospital, report.report_date = self.extract_hospital_info(full_text)
 
-        # Extrai APENAS os dados essenciais usando múltiplos padrões
+        # Extrai TODOS os dados essenciais (incluindo o novo nome)
         report.essential.patient_id = self.extract_essential_value(full_text, self.essential_patterns['patient_id'])
+        report.essential.patient_name = self.extract_patient_name(full_text)
         report.essential.study_id = self.extract_essential_value(full_text, self.essential_patterns['study_id'])
         report.essential.accession_number = self.extract_essential_value(full_text,
                                                                          self.essential_patterns['accession_number'])
-        report.essential.study_date = self.extract_essential_value(full_text, self.essential_patterns['study_date'])
+        report.essential.study_date = self.extract_study_date_clean(full_text)
         report.essential.birth_date = self.extract_essential_value(full_text, self.essential_patterns['birth_date'])
         report.essential.sex = self.extract_essential_value(full_text, self.essential_patterns['sex'])
 
         if debug_mode:
             print("DADOS ESSENCIAIS EXTRAÍDOS:")
             print(f"  Patient ID: '{report.essential.patient_id}'")
+            print(f"  Patient Name: '{report.essential.patient_name}'")
             print(f"  Study ID: '{report.essential.study_id}'")
             print(f"  Accession Number: '{report.essential.accession_number}'")
             print(f"  Study Date: '{report.essential.study_date}'")
@@ -312,12 +478,12 @@ class CTReportExtractorMinimal:
             print(f"  Sex: '{report.essential.sex}'")
             print(f"{'=' * 60}\n")
 
-        # Extrai dados técnicos (estes funcionam bem)
+        # Extrai dados técnicos
         report.device.observer_name = self.extract_technical_value(full_text, self.technical_patterns['device_name'])
         report.device.manufacturer = self.extract_technical_value(full_text, self.technical_patterns['manufacturer'])
         report.device.model_name = self.extract_technical_value(full_text, self.technical_patterns['model_name'])
         report.device.serial_number = self.extract_technical_value(full_text, self.technical_patterns['serial_number'])
-        report.device.physical_location = self.extract_technical_value(full_text, self.technical_patterns['location'])
+        report.device.physical_location = self.extract_physical_location_multiline(full_text)
 
         # Extrai informações de irradiação
         report.irradiation.start_time = self.extract_technical_value(full_text,
@@ -336,16 +502,8 @@ class CTReportExtractorMinimal:
 
 def process_pdf_folder(folder_path: str = "ct_reports", json_folder: str = "ct_reports_json",
                        debug_mode: bool = False) -> List[Dict]:
-    """Processa todos os arquivos PDF em uma pasta específica
+    """Processa todos os arquivos PDF em uma pasta específica"""
 
-    Args:
-        folder_path (str): Caminho para a pasta com os PDFs (padrão: "ct_reports")
-        json_folder (str): Pasta onde salvar os arquivos JSON (padrão: "ct_reports_json")
-        debug_mode (bool): Se True, mostra informações detalhadas do processamento
-
-    Returns:
-        List[Dict]: Lista de relatórios processados
-    """
     # Cria a pasta se não existir
     if not os.path.exists(folder_path):
         try:
@@ -396,13 +554,7 @@ def process_pdf_folder(folder_path: str = "ct_reports", json_folder: str = "ct_r
 
 
 def save_to_json(reports: List[Dict], output_file: str, json_folder: str = "ct_reports_json"):
-    """Salva os relatórios em um arquivo JSON
-
-    Args:
-        reports (List[Dict]): Lista de relatórios para salvar
-        output_file (str): Nome do arquivo JSON
-        json_folder (str): Pasta onde salvar os arquivos JSON (padrão: "ct_reports_json")
-    """
+    """Salva os relatórios em um arquivo JSON"""
     # Cria a pasta JSON se não existir
     if not os.path.exists(json_folder):
         try:
@@ -410,7 +562,7 @@ def save_to_json(reports: List[Dict], output_file: str, json_folder: str = "ct_r
             print(f"✓ Pasta '{json_folder}' criada com sucesso!")
         except Exception as e:
             print(f"⚠️ Erro ao criar pasta '{json_folder}': {str(e)}")
-            json_folder = ""  # Se não conseguir criar, salva na raiz
+            json_folder = ""
 
     # Caminho completo para o arquivo
     output_path = os.path.join(json_folder, output_file) if json_folder else output_file
@@ -425,7 +577,6 @@ def save_to_json(reports: List[Dict], output_file: str, json_folder: str = "ct_r
         return False
 
 
-# Exemplo de uso
 if __name__ == "__main__":
     import argparse
 
@@ -471,11 +622,15 @@ if __name__ == "__main__":
         print(f"\n📋 EXEMPLO DO PRIMEIRO RELATÓRIO PROCESSADO:")
         print(f"  • Hospital: {first_report['hospital']}")
         patient_id = first_report['essential']['patient_id']
+        patient_name = first_report['essential']['patient_name']
         study_id = first_report['essential']['study_id']
         accession = first_report['essential']['accession_number']
+        study_date = first_report['essential']['study_date']
         print(f"  • Patient ID: {patient_id}")
+        print(f"  • Patient Name: {patient_name}")
         print(f"  • Study ID: {study_id}")
         print(f"  • Accession Number: {accession}")
+        print(f"  • Study Date: {study_date}")
         print(f"  • Birth Date: {first_report['essential']['birth_date']}")
         print(f"  • Sex: {first_report['essential']['sex']}")
         print(f"  • Total de aquisições: {len(first_report['acquisitions'])}")

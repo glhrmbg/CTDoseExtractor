@@ -16,38 +16,87 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 
 def calculate_age(birth_date_str, exam_date_str):
-    """Calcula a idade com base na data de nascimento e data do exame"""
+    """Calcula a idade do paciente na época do exame."""
     if not birth_date_str or not exam_date_str:
         return '-'
 
-    # Extrai o ano da data de nascimento
-    birth_year_match = re.search(r'(\d{4})', birth_date_str)
-    if not birth_year_match:
-        # Tenta outro formato: "Jul 1, 1997"
-        month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-        for month in month_names:
-            if month in birth_date_str:
-                parts = birth_date_str.replace(",", "").split()
-                if len(parts) >= 3 and parts[2].isdigit() and len(parts[2]) == 4:
-                    birth_year = int(parts[2])
-                    break
-        else:
-            return '-'  # Não conseguiu extrair o ano
-    else:
-        birth_year = int(birth_year_match.group(1))
+    try:
+        # Tenta parsing com diferentes formatos de data
+        birth_date = None
+        exam_date = None
 
-    # Extrai o ano da data do exame
-    exam_year_match = re.search(r'(\d{4})', exam_date_str)
-    if not exam_year_match:
-        return '-'  # Não conseguiu extrair o ano
+        # Parsing da data de nascimento - formatos comuns
+        birth_formats = [
+            '%b %d, %Y',
+            '%B %d, %Y',
+            '%Y-%m-%d',
+            '%d/%m/%Y',
+            '%m/%d/%Y',
+        ]
 
-    exam_year = int(exam_year_match.group(1))
+        for fmt in birth_formats:
+            try:
+                birth_date = datetime.strptime(birth_date_str.strip(), fmt)
+                break
+            except ValueError:
+                continue
 
-    # Calcula a idade simples (apenas com base nos anos)
-    # Este é um cálculo aproximado sem considerar mês/dia
-    age = exam_year - birth_year
+        if not birth_date:
+            # Se não conseguiu fazer parse, tenta extrair apenas o ano (fallback)
+            birth_year_match = re.search(r'(\d{4})', birth_date_str)
+            if birth_year_match:
+                birth_year = int(birth_year_match.group(1))
+                birth_date = datetime(birth_year, 1, 1)  # 1º de janeiro como aproximação
+            else:
+                return '-'
 
-    return str(age)
+        # Parsing da data do exame - formatos comuns
+        exam_formats = [
+            '%b %d, %Y, %I:%M:%S %p',  # "May 5, 2025, 1:20:41 PM"
+            '%B %d, %Y, %I:%M:%S %p',  # "May 5, 2025, 1:20:41 PM"
+            '%b %d, %Y',  # "May 5, 2025"
+            '%B %d, %Y',  # "May 5, 2025"
+            '%Y-%m-%d',  # "2025-05-05"
+            '%d/%m/%Y',  # "05/05/2025"
+            '%m/%d/%Y',  # "05/05/2025"
+        ]
+
+        for fmt in exam_formats:
+            try:
+                exam_date = datetime.strptime(exam_date_str.strip(), fmt)
+                break
+            except ValueError:
+                continue
+
+        if not exam_date:
+            # Se não conseguiu fazer parse, tenta extrair apenas o ano (fallback)
+            exam_year_match = re.search(r'(\d{4})', exam_date_str)
+            if exam_year_match:
+                exam_year = int(exam_year_match.group(1))
+                exam_date = datetime(exam_year, 6, 15)  # Meio do ano como aproximação
+            else:
+                return '-'
+
+        age = exam_date.year - birth_date.year
+
+        # Verifica se o aniversário já passou na data do exame
+        if (exam_date.month, exam_date.day) < (birth_date.month, birth_date.day):
+            age -= 1  # Subtrai 1 se o aniversário ainda não chegou
+
+        return str(age)
+
+    except Exception as e:
+        # Em caso de erro, tenta o cálculo simples por ano
+        birth_year_match = re.search(r'(\d{4})', birth_date_str)
+        exam_year_match = re.search(r'(\d{4})', exam_date_str)
+
+        if birth_year_match and exam_year_match:
+            birth_year = int(birth_year_match.group(1))
+            exam_year = int(exam_year_match.group(1))
+            age = exam_year - birth_year
+            return str(age)
+
+        return '-'
 
 
 def extract_scan_info(acquisition):
@@ -138,7 +187,7 @@ def json_to_excel(json_folder="ct_reports_json", output_file="ct_dose_report.xls
 
     # Define os cabeçalhos
     headers = [
-        "ID do paciente", "Sexo", "Data de nascimento", "Idade", "Pesquisa de interesse",
+        "ID do paciente", "Nome do paciente", "Sexo", "Data de nascimento", "Idade", "Pesquisa de interesse",
         "Data do exame", "Descrição da série", "Scan mode", "mAs",
         "kV", "CTDIvol", "DLP", "DLP total", "Phantom type", "SSDE", "Avg scan size"
     ]
@@ -164,21 +213,22 @@ def json_to_excel(json_folder="ct_reports_json", output_file="ct_dose_report.xls
 
     # Define larguras das colunas
     ws.column_dimensions['A'].width = 15  # ID do paciente
-    ws.column_dimensions['B'].width = 10  # Sexo
-    ws.column_dimensions['C'].width = 18  # Data de nascimento
-    ws.column_dimensions['D'].width = 10  # Idade
-    ws.column_dimensions['E'].width = 20  # Pesquisa de interesse
-    ws.column_dimensions['F'].width = 18  # Data do exame
-    ws.column_dimensions['G'].width = 20  # Descrição da série
-    ws.column_dimensions['H'].width = 15  # Scan mode
-    ws.column_dimensions['I'].width = 10  # mAs
-    ws.column_dimensions['J'].width = 10  # kV
-    ws.column_dimensions['K'].width = 10  # CTDIvol
-    ws.column_dimensions['L'].width = 10  # DLP
-    ws.column_dimensions['M'].width = 10  # DLP total
-    ws.column_dimensions['N'].width = 15  # Phantom type
-    ws.column_dimensions['O'].width = 10  # SSDE
-    ws.column_dimensions['P'].width = 15  # Avg scan size
+    ws.column_dimensions['B'].width = 25  # ✨ Nome do paciente - NOVO
+    ws.column_dimensions['C'].width = 10  # Sexo
+    ws.column_dimensions['D'].width = 18  # Data de nascimento
+    ws.column_dimensions['E'].width = 10  # Idade
+    ws.column_dimensions['F'].width = 20  # Pesquisa de interesse
+    ws.column_dimensions['G'].width = 18  # Data do exame
+    ws.column_dimensions['H'].width = 20  # Descrição da série
+    ws.column_dimensions['I'].width = 15  # Scan mode
+    ws.column_dimensions['J'].width = 10  # mAs
+    ws.column_dimensions['K'].width = 10  # kV
+    ws.column_dimensions['L'].width = 10  # CTDIvol
+    ws.column_dimensions['M'].width = 10  # DLP
+    ws.column_dimensions['N'].width = 10  # DLP total
+    ws.column_dimensions['O'].width = 15  # Phantom type
+    ws.column_dimensions['P'].width = 10  # SSDE
+    ws.column_dimensions['Q'].width = 15  # Avg scan size
 
     # Linha atual para inserção
     row_idx = 2
@@ -189,8 +239,9 @@ def json_to_excel(json_folder="ct_reports_json", output_file="ct_dose_report.xls
 
         # Obtém informações básicas do paciente/estudo
         patient_id = essential.get('patient_id', '')
+        patient_name = essential.get('patient_name', '')
         sex = essential.get('sex', '')
-        birth_date = essential.get('birth_date', '')  # Mantemos a data de nascimento, sem calcular idade
+        birth_date = essential.get('birth_date', '')
         study_date = essential.get('study_date', '')
 
         # DLP total - direto do JSON, sem extração
@@ -206,30 +257,31 @@ def json_to_excel(json_folder="ct_reports_json", output_file="ct_dose_report.xls
 
                 # Insere valores na planilha com tratamento explícito para None/null
                 ws.cell(row=row_idx, column=1, value=patient_id if patient_id is not None else '-')
-                ws.cell(row=row_idx, column=2, value=sex if sex is not None else '-')
-                ws.cell(row=row_idx, column=3, value=birth_date if birth_date is not None else '-')
+                ws.cell(row=row_idx, column=2, value=patient_name if patient_name is not None else '-')
+                ws.cell(row=row_idx, column=3, value=sex if sex is not None else '-')
+                ws.cell(row=row_idx, column=4, value=birth_date if birth_date is not None else '-')
 
                 # Calcula a idade com base na data de nascimento e data do exame
                 age = calculate_age(birth_date, study_date)
-                ws.cell(row=row_idx, column=4, value=age)
+                ws.cell(row=row_idx, column=5, value=age)
 
-                ws.cell(row=row_idx, column=5, value=scan_info['protocol'])
-                ws.cell(row=row_idx, column=6, value=study_date if study_date is not None else '-')
+                ws.cell(row=row_idx, column=6, value=scan_info['protocol'])
+                ws.cell(row=row_idx, column=7, value=study_date if study_date is not None else '-')
                 # Descrição da série - tratamento especial para garantir '-' em caso de null
                 description_value = scan_info['description']
                 # Verificação extra rigorosa para garantir que não seja null, string vazia, espaços, etc.
                 is_empty = (description_value is None or description_value == '' or
                             description_value.strip() == '' or description_value == 'null')
-                ws.cell(row=row_idx, column=7, value='-' if is_empty else description_value)
-                ws.cell(row=row_idx, column=8, value=scan_info['scan_mode'])
-                ws.cell(row=row_idx, column=9, value=scan_info['tube_current'])
-                ws.cell(row=row_idx, column=10, value=scan_info['kv'])
-                ws.cell(row=row_idx, column=11, value=scan_info['ctdivol'])
-                ws.cell(row=row_idx, column=12, value=scan_info['dlp'])
-                ws.cell(row=row_idx, column=13, value=total_dlp if total_dlp is not None else '-')
-                ws.cell(row=row_idx, column=14, value=scan_info['phantom_type'])
-                ws.cell(row=row_idx, column=15, value=scan_info['ssde'])
-                ws.cell(row=row_idx, column=16, value=scan_info['avg_scan_size'])
+                ws.cell(row=row_idx, column=8, value='-' if is_empty else description_value)
+                ws.cell(row=row_idx, column=9, value=scan_info['scan_mode'])
+                ws.cell(row=row_idx, column=10, value=scan_info['tube_current'])
+                ws.cell(row=row_idx, column=11, value=scan_info['kv'])
+                ws.cell(row=row_idx, column=12, value=scan_info['ctdivol'])
+                ws.cell(row=row_idx, column=13, value=scan_info['dlp'])
+                ws.cell(row=row_idx, column=14, value=total_dlp if total_dlp is not None else '-')
+                ws.cell(row=row_idx, column=15, value=scan_info['phantom_type'])
+                ws.cell(row=row_idx, column=16, value=scan_info['ssde'])
+                ws.cell(row=row_idx, column=17, value=scan_info['avg_scan_size'])
 
                 # Aplica borda a todas as células
                 for col_idx in range(1, 17):
@@ -239,28 +291,29 @@ def json_to_excel(json_folder="ct_reports_json", output_file="ct_dose_report.xls
         else:
             # Se não houver aquisições, adiciona pelo menos uma linha com dados básicos
             ws.cell(row=row_idx, column=1, value=patient_id if patient_id is not None else '-')
-            ws.cell(row=row_idx, column=2, value=sex if sex is not None else '-')
-            ws.cell(row=row_idx, column=3, value=birth_date if birth_date is not None else '-')
+            ws.cell(row=row_idx, column=2, value=patient_name if patient_name is not None else '-')
+            ws.cell(row=row_idx, column=3, value=sex if sex is not None else '-')
+            ws.cell(row=row_idx, column=4, value=birth_date if birth_date is not None else '-')
 
             # Calcula a idade para esta linha também
             age = calculate_age(birth_date, study_date)
-            ws.cell(row=row_idx, column=4, value=age)
+            ws.cell(row=row_idx, column=5, value=age)
 
-            ws.cell(row=row_idx, column=5, value='-')
-            ws.cell(row=row_idx, column=6, value=study_date if study_date is not None else '-')
-            ws.cell(row=row_idx, column=7, value='-')
+            ws.cell(row=row_idx, column=6, value='-')
+            ws.cell(row=row_idx, column=7, value=study_date if study_date is not None else '-')
             ws.cell(row=row_idx, column=8, value='-')
             ws.cell(row=row_idx, column=9, value='-')
             ws.cell(row=row_idx, column=10, value='-')
             ws.cell(row=row_idx, column=11, value='-')
             ws.cell(row=row_idx, column=12, value='-')
-            ws.cell(row=row_idx, column=13, value=total_dlp if total_dlp is not None else '-')
-            ws.cell(row=row_idx, column=14, value='-')
+            ws.cell(row=row_idx, column=13, value='-')
+            ws.cell(row=row_idx, column=14, value=total_dlp if total_dlp is not None else '-')
             ws.cell(row=row_idx, column=15, value='-')
             ws.cell(row=row_idx, column=16, value='-')
+            ws.cell(row=row_idx, column=17, value='-')
 
             # Aplica borda a todas as células
-            for col_idx in range(1, 17):
+            for col_idx in range(1, 18):
                 ws.cell(row=row_idx, column=col_idx).border = border
 
             row_idx += 1
